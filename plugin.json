@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "id": "org.ccord.example-plugin",
+  "name": "Example Plugin",
+  "version": "1.0.0",
+  "api": 1,
+  "main": "main.lua",
+  "description": "Official template extension demonstrating Class 1 APIs and decentralized catalog publishing.",
+  "license": "MIT",
+  "permissions": []
+}

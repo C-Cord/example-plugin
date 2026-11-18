@@ -1,0 +1,35 @@
+name: Publish C-Cord Plugin
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_release:
+        description: "Automatically validate plugin.json, pack .cce, and create/update GitHub Release v<version>"
+        type: boolean
+        default: true
+      release_tag:
+        description: "Optional tag override (blank uses v<version> from plugin.json)"
+        type: string
+        default: ""
+      release_notes:
+        description: "Optional release notes for the GitHub Release"
+        type: string
+        default: ""
+      announce:
+        description: "Announce this repository to C-Cord/plugin-catalog"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    uses: C-Cord/plugin-catalog/.github/workflows/reusable-publish.yml@main
+    with:
+      package_release: ${{ inputs.package_release }}
+      release_tag: ${{ inputs.release_tag }}
+      release_notes: ${{ inputs.release_notes }}
+      announce: ${{ inputs.announce }}
+    secrets:
+      CCORD_ANNOUNCE_TOKEN: ${{ secrets.CCORD_ANNOUNCE_TOKEN }}
