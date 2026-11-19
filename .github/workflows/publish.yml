@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       package_release:
-        description: "Automatically validate plugin.json, pack .cce, and create/update GitHub Release v<version>"
+        description: "Automatically pack <id>-<version>.cce and create/update GitHub Release v<version>"
         type: boolean
         default: true
       release_tag:
@@ -16,20 +16,72 @@ on:
         type: string
         default: ""
       announce:
-        description: "Announce this repository to C-Cord/plugin-catalog"
+        description: "Instantly announce this release to plugins.c-cord.org via GitHub OIDC (zero secrets required)"
         type: boolean
         default: true
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   publish:
-    uses: C-Cord/plugin-catalog/.github/workflows/reusable-publish.yml@main
-    with:
-      package_release: ${{ inputs.package_release }}
-      release_tag: ${{ inputs.release_tag }}
-      release_notes: ${{ inputs.release_notes }}
-      announce: ${{ inputs.announce }}
-    secrets:
-      CCORD_ANNOUNCE_TOKEN: ${{ secrets.CCORD_ANNOUNCE_TOKEN }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Package & publish GitHub Release (.cce)
+        if: ${{ inputs.package_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG_OVERRIDE: ${{ inputs.release_tag }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          if [ ! -f plugin.json ]; then
+            echo "ERROR: plugin.json not found at repository root"
+            exit 1
+          fi
+          PLUGIN_ID=$(jq -er '.id' plugin.json)
+          PLUGIN_VER=$(jq -er '.version' plugin.json)
+          MAIN_FILE=$(jq -r '.main // "main.lua"' plugin.json)
+          if [ ! -f "$MAIN_FILE" ]; then
+            echo "ERROR: declared main script '$MAIN_FILE' not found"
+            exit 1
+          fi
+
+          CCE_FILE="/tmp/${PLUGIN_ID}-${PLUGIN_VER}.cce"
+          zip -r9 "$CCE_FILE" . -x ".git/*" ".github/*" "tests/*" "*.cce" "*.zip" ".*"
+          SHA256=$(sha256sum "$CCE_FILE" | awk '{print $1}')
+          TAG="${RELEASE_TAG_OVERRIDE:-v${PLUGIN_VER}}"
+          NOTES="${RELEASE_NOTES:-Release ${TAG} of ${PLUGIN_ID} (SHA-256: \`${SHA256}\`)}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$CCE_FILE" --clobber
+          else
+            gh release create "$TAG" "$CCE_FILE" --title "$TAG" --notes "$NOTES"
+          fi
+
+      - name: Announce to plugins.c-cord.org (GitHub OIDC)
+        if: ${{ inputs.announce }}
+        run: |
+          OIDC_JWT=$(curl -fsSL \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://plugins.c-cord.org" \
+            | jq -er '.value')
+
+          HTTP_CODE=$(curl -sS -o /tmp/announce_resp.json -w "%{http_code}" \
+            -X POST "https://plugins.c-cord.org/api/v1/announce" \
+            -H "Authorization: Bearer ${OIDC_JWT}" \
+            -H "Accept: application/json")
+
+          cat /tmp/announce_resp.json
+          echo ""
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "ERROR: Catalog server rejected announcement (HTTP $HTTP_CODE)"
+            exit 1
+          fi
+          MSG=$(jq -r '.message // "Indexed successfully"' /tmp/announce_resp.json)
+          echo "### Announced to C-Cord Plugin Catalog" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Result:** ${MSG}" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Catalog:** https://plugins.c-cord.org" >> "$GITHUB_STEP_SUMMARY"
